@@ -1,66 +1,31 @@
 import asyncio
 import json
-import os
 import websockets
 from dotenv import load_dotenv
+from json.decoder import JSONDecodeError
 
 CONFIG = {
     "ev3": {
-        "entry_port": 8900,
-        "port_range": {
-            "start": 6790,
-            "end": 6820
-        }
+        "port": 8900,
     },
     "controller": {
-        "entry_port": 8800,
-        "port_range": {
-            "start": 6890,
-            "end": 6920
-        }
+        "port": 8800,
     },
     "connection_url": "/ev3c",
-    "web_backend_command": {
-        "set": "uberspace web backend set {} --http --port {}",
-        "del": "uberspace web backend del {} --port {}"
-    },
     "env_path": ".env",
-    "uberspace_active": False
 }
 
 load_dotenv(CONFIG['env_path'])
 
 
-class NoPortFreeException(Exception):
-    """Raised when no port is currently available to be assigned to \
-        the client."""
-    def __init__(self, message="Currently no free port available.",
-                 *args: object):
-        super().__init__(message, *args)
-
-
-class UnconnectedClientException(Exception):
-    """Raised when no EV3/Controller is currently connected the websocket."""
-    def __init__(self, websocket, *args: object):
-        super().__init__(
-            "No client is currently connected to port {}".format(get_ws_port(websocket)), *args)
-
-
-class NoFreeEV3Exception(Exception):
+class NoEV3AvailableError(Exception):
     """Raised when no EV3 is currently available to connect to."""
     def __init__(self, *args: object):
         super().__init__(
             "No EV3 is currently available", *args)
 
 
-class UnconnectedPortException(Exception):
-    """Raised when port is not connected to another port."""
-    def __init__(self, port, *args: object):
-        super().__init__(
-            "No port currently connected to port {}".format(port), *args)
-
-
-class PermissionDeniedException(Exception):
+class PermissionDeniedError(Exception):
     """Raised when the client does not have permission for this \
         content/action."""
     def __init__(self, reason, *args: object):
@@ -68,193 +33,224 @@ class PermissionDeniedException(Exception):
             "Permission denied: {}".format(reason), *args)
 
 
-servers = {
-    'controller': [],
-    'ev3': []
+class InitialDataError(Exception):
+    """Raised when the clients initial does not have the expected format or content."""
+    def __init__(self, message, inital_data_json=None, *args: object):
+        self.message = "Faulty Initial Data: {}".format(message)
+        self.json = inital_data_json
+        super().__init__(self.message, *args)
+
+
+connections = {
+    # {ev3_id}: {
+    #     "websocket": {ev3_websocket},
+    #     "control": {controller_websocket},
+    #     "queue": [{controller_websocket}]
+    # }
 }
 
 
-connections = []  # tuple: (ev3_websocket, controller_websocket)
-
-
-def get_port(server):
-    return server.sockets[0].getsockname()[1] \
-        if server.sockets is not [] else None
-
-
-def get_ws_port(websocket):
-    return get_port(websocket.ws_server)
-
-
-def get_ports(client_servers):
-    """Returns ports the given client servers listen on."""
-    ports = []
-    for server in client_servers:
-        ports.append(get_port(server))
-    return ports
-
-
-async def start_server(server_group, port, callback_on_message):
-    if CONFIG['uberspace_active']:
-        os.system(CONFIG['web_backend_command']['set'].format(
-            CONFIG['connection_url'], port))
-    server_group.append(await websockets.serve(callback_on_message, "", port))
-
-
-async def stop_server(server):
-    await server.close()
-    await server.wait_closed()
-    if CONFIG['uberspace_active']:
-        os.system(CONFIG['web_backend_command']['del'].format(
-            CONFIG['connection_url'], get_port(server)))
-    return server
-
-
-def get_ev3_socket(controller_socket):
-    """Returns the EV3 socket currently connected to given controller socket."""
+def get_controled_websocket(controller_websocket):
+    """Returns EV3 websocket the given controller websocket is controlling."""
     global connections
-    for connection in connections:
-        if controller_socket == connection[1]:
-            return connection[0]
-    raise UnconnectedClientException(controller_socket)
+    for connection in connections.values():
+        if connection['control'] == controller_websocket:
+            return connection['websocket']
+    return None
 
 
-def get_controller_socket(ev3_socket):
-    """Returns the controller socket currently connected to given EV3 socket."""
+def get_controlling_websocket(ev3_websocket):
+    """Returns controller websocket controlling the given EV3 controller."""
     global connections
-    for connection in connections:
-        if ev3_socket == connection[0]:
-            return connection[1]
-    raise UnconnectedClientException(ev3_socket)
+    for connection in connections.values():
+        if connection['websocket'] == ev3_websocket:
+            return connection['control']
 
+def get_connected_websockets(ev3_id):
+    """Returns websockets of controlling and queued controller clients."""
+    global connections
+    controllers = []
+    connection = connections[ev3_id]
+    if connection['control'] is not None:
+        controllers.append(connection['control'])
+    controllers += connection['queue']
+    return controllers
 
 async def on_controller_connect(websocket):
-    """Connects a controller to a free EV3 and handles the data transfer."""
+    """Connects a controller to an EV3 and handles the data transfer."""
     try:
-        open_controller_connection(websocket)
-        async for message in websocket:
-            controller_socket = get_ev3_socket(websocket)
-            await controller_socket.send(message)
-    finally:
-        on_client_reject(websocket, "No free EV3 available")
-        close_connection(websocket)
+        await establish_controller_connection(websocket)
+        # except PermissionDeniedError:
+        #     await reject_client(websocket, "Permission denied")
+    except JSONDecodeError:
+        await reject_client(websocket, "No initial JSON data transfered")
+    except NoEV3AvailableError:
+        await reject_client(websocket, "No EV3 available")
+    else:
+        try:
+            async for message in websocket:
+                ev3_websocket = get_controled_websocket(websocket)
+                if ev3_websocket is not None:
+                    await ev3_websocket.send(message)
+        finally:
+            await disband_controller_connection(websocket)
+
+
+async def establish_controller_connection(websocket):
+    """Performs controller connection protocol. Blocks until connection is established.
+    
+    Raises
+    ------
+    NoEV3AvailableError:
+        If there is no EV3 connected to the server.
+
+    PermissionDeniedError:
+        If the password is either not given or wrong.
+    """
+    global connections
+    initial_data = json.loads(await websocket.recv())
+    # TODO: Password verification
+    # if not initial_data.get('password', None) == os.getenv('CLIENT_PW'):
+    #     raise PermissionDeniedError("Entry password incorrect")    
+    if len(connections.keys()) == 0:
+        raise NoEV3AvailableError()
+    preferred_ev3 = initial_data.get("preferred_ev3", None)
+    if preferred_ev3 is None:
+        preferred_ev3 = get_available_ev3()
+    await control(preferred_ev3, websocket)
+
+
+async def disband_controller_connection(websocket):
+    """Removes websocket from its queue or removes websocket from control and yields control to first controller in queue."""
+    global connections
+    for ev3_id, connection in connections.items():
+        if websocket == connection['control']:
+            connection['control'] = None
+            if len(connection['queue']) > 0:
+                await control(ev3_id, connection['queue'][0])
+            elif connection['websocket'] is None:
+                del connections[ev3_id]
+            break
+        elif websocket in connection['queue']:
+            connection['queue'].remove(websocket)
+            break
+
+
+async def control(ev3_id, websocket):
+    """Sets websocket as controller of given EV3. Removes controller from queue, if present. \
+        Puts controller in queue if the EV3 is already controlled."""
+    global connections
+    if connections[ev3_id]['control'] is None:
+        connections[ev3_id]['control'] = websocket
+        if websocket in connections[ev3_id]['queue']:
+            connections[ev3_id]['queue'].remove(websocket)
+        await update_client(websocket, "Control", ev3_id)
+    else:
+        connections[ev3_id]['queue'].append(websocket)
+        await update_client(websocket, "Queue", ev3_id)
+
+
+def get_available_ev3():
+    """Returns ID of an EV3 that is either uncontrolled or has a the shortest queue."""
+    global connections
+    shortest_queue = (None, 0)
+    for ev3_id, connection in connections.items():
+        if connection['control'] is None:
+            return ev3_id
+        elif shortest_queue[0] is None or shortest_queue[1] < len(connection['queue']):
+            shortest_queue = (ev3_id, len(connection['queue']))
+    return shortest_queue[0]
 
 
 async def on_ev3_connect(websocket):
     """Makes EV3 available to controllers and handles the data transfer."""
     try:
-        open_ev3_connection(websocket)
-        async for message in websocket:
-            controller_socket = get_controller_socket(websocket)
-            await controller_socket.send(message)
-    finally:
-        close_connection(websocket)
+        await establish_ev3_connection(websocket)
+    except JSONDecodeError:
+        await reject_client(websocket, "No initial JSON data transfered")
+    except InitialDataError as e:
+        await reject_client(websocket, e.message)
+    # except PermissionDeniedError:
+    #     await reject_client(websocket, "Permission denied")
+    else:
+        try:
+            async for message in websocket:
+                controller_websocket = get_controlling_websocket(websocket)
+                if controller_websocket is not None:
+                    await controller_websocket.send(message)
+        finally:
+            await disband_ev3_connection(websocket)
 
 
-def open_controller_connection(websocket):
+async def establish_ev3_connection(websocket):
+    """Performs EV3 connection protocol. Blocks until connection is established.
+    
+    Raises
+    ------
+    JSONDecoderError:
+        If EV3 does not send JSON in its first message (as initial data).
+
+    InitialDataError:
+        If ID is missing in initial data sent by the EV3.
+    
+    PermissionDeniedError:
+        If the password is either not given or wrong.
+    """
     global connections
-    for index, connection in enumerate(connections):
-        if connection[1] is None:
-            connections[index] = (connection[0], websocket)
-            return
-    raise NoFreeEV3Exception()
-
-
-def open_ev3_connection(websocket):
-    global connections
-    connections.append((websocket, None))
-
-
-def close_connection(websocket):
-    """Removes the websocket from connections."""
-    global connections
-    for index, connection in enumerate(connections):
-        if websocket == connection[0]:
-            connections[index] = (None, connection[1])
-            return
-        if websocket == connection[1]:
-            connections[index] = (connection[0], None)
-            return
-
-
-async def get_new_client_port(range, client_servers, callback_on_message):
-    """Opens and returns a port in the given port range. Also starts a server on this port."""
-    used_ports = get_ports(client_servers)
-    free_ports = [port for port in range if port not in used_ports]
-    if free_ports == []:
-        raise NoPortFreeException()
-    client_port = free_ports[0]
-    await start_server(client_servers, client_port, callback_on_message)
-    return client_port
-
-
-async def get_new_controller_port():
-    """Opens and returns a port from the Controller port range. Also starts a server on this port."""
-    global servers
-    return await get_new_client_port(
-        range(CONFIG['controller']['port_range']['start'],
-              CONFIG['controller']['port_range']['end']),
-        servers['controller'],
-        on_controller_connect
-    )
-
-
-async def get_new_ev3_port():
-    """Opens and returns a port from the EV3 port range. Also starts a server on this port."""
-    global servers    
-    ev3_port = await get_new_client_port(
-        range(CONFIG['ev3']['port_range']['start'],
-              CONFIG['ev3']['port_range']['end']),
-        servers['ev3'],
-        on_ev3_connect
-    )
-    return ev3_port
-
-
-async def on_client_entry(websocket, callback_get_new_port):
-    """Start server for a client on a port retrieved from respective range. \
-        The client can later connect to this server to send and receive messages."""
+    initial_data = json.loads(await websocket.recv())
     # TODO: Password verification
-    # initial_data = json.loads(await websocket.recv())
-    try:
-        # if not initial_data.get('password', None) == os.getenv('CLIENT_PW'):
-        #     raise PermissionDeniedException("Entry password incorrect")
-        assigned_port = await callback_get_new_port()
-        await websocket.send(str(assigned_port))
-    except NoPortFreeException:
-        await on_client_reject(websocket)
-    # except PermissionDeniedException:
-    #     await on_client_reject(websocket, "Permission denied")
+    # if not initial_data.get('password', None) == os.getenv('CLIENT_PW'):
+    #     raise PermissionDeniedError("Entry password incorrect")
+    if "id" not in initial_data:
+        raise InitialDataError("ID missing", initial_data)
+    ev3_id = initial_data.get("id", None)
+    ev3_connection = connections.get(ev3_id, {
+        "websocket": None,
+        "control": None,
+        "queue": []
+    })
+    ev3_connection["websocket"] = websocket
+    connections[ev3_id] = ev3_connection
+    for controller in get_connected_websockets(ev3_id):
+        if controller == ev3_connection['control']:
+            await update_client(controller, "Control", ev3_id)
+        else:
+            await update_client(controller, "Queue", ev3_id)
 
 
-async def on_client_reject(websocket, reason="Capacity reached"):
-    await websocket.send("Rejected: {}".format(reason))
+async def disband_ev3_connection(websocket):
+    """Disbands the EV3 connection and informs all connected controllers."""
+    global connections
+    for ev3_id, connection in connections.items():
+        if websocket == connection['websocket']:
+            controllers = get_connected_websockets(ev3_id)
+            if controllers == []:
+                del connections[ev3_id]
+            else:
+                for controller in controllers:
+                    await update_client(controller, "Pending", ev3_id)
+                connection['websocket'] = None
+            break
 
 
-async def on_controller_entry(websocket):
-    """Start server on a port in the controller port range which the controller client can connect to later."""
-    await on_client_entry(websocket, get_new_controller_port)
+async def reject_client(websocket, reason="Capacity reached"):
+    await update_client(websocket, "Rejected", reason)
 
 
-async def on_ev3_entry(websocket):
-    """Start server on a port in the EV3 port range which the EV3 client can connect to later."""
-    await on_client_entry(websocket, get_new_ev3_port)
+async def update_client(websocket, status, content):
+    await websocket.send("{}: {}".format(status, content))
 
 
 async def main():
-    async with websockets.serve(on_controller_entry, "",
-                                CONFIG["controller"]["entry_port"]), \
-            websockets.serve(on_ev3_entry, "", CONFIG["ev3"]["entry_port"]):
+    async with websockets.serve(on_controller_connect, "",
+                                CONFIG["controller"]["port"]), \
+            websockets.serve(on_ev3_connect, "", CONFIG["ev3"]["port"]):
         print("Connection entries on:")
         print("For EV3: {}:{}".format(CONFIG["connection_url"],
-                                      CONFIG["ev3"]["entry_port"]))
+                                      CONFIG["ev3"]["port"]))
         print("For Controller: {}:{}".format(CONFIG["connection_url"],
-                                             CONFIG["controller"]["entry_port"]))
-        global servers
+                                             CONFIG["controller"]["port"]))
         await asyncio.Future()  # run forever
-        # TODO: Handle disconnect
-        for server in servers['ev3'] + servers['controller']:
-            stop_server(server)
 
 
 asyncio.run(main())
