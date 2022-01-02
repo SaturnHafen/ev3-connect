@@ -46,6 +46,13 @@ class UnconnectedClientException(Exception):
             "No client is currently connected to port {}".format(get_ws_port(websocket)), *args)
 
 
+class NoFreeEV3Exception(Exception):
+    """Raised when no EV3 is currently available to connect to."""
+    def __init__(self, *args: object):
+        super().__init__(
+            "No EV3 is currently available", *args)
+
+
 class UnconnectedPortException(Exception):
     """Raised when port is not connected to another port."""
     def __init__(self, port, *args: object):
@@ -67,17 +74,7 @@ servers = {
 }
 
 
-connections = []  # tuple: (ev3_port, controller_port)
-
-
-def get_connected_port(port):
-    global connections
-    for connection in connections:
-        if port == connection[0]:
-            return connection[1]
-        if port == connection[1]:
-            return connection[0]
-    raise UnconnectedPortException(port)
+connections = []  # tuple: (ev3_websocket, controller_websocket)
 
 
 def get_port(server):
@@ -90,6 +87,7 @@ def get_ws_port(websocket):
 
 
 def get_ports(client_servers):
+    """Returns ports the given client servers listen on."""
     ports = []
     for server in client_servers:
         ports.append(get_port(server))
@@ -112,7 +110,75 @@ async def stop_server(server):
     return server
 
 
-async def get_client_port(range, client_servers, callback_on_message):
+def get_ev3_socket(controller_socket):
+    """Returns the EV3 socket currently connected to given controller socket."""
+    global connections
+    for connection in connections:
+        if controller_socket == connection[1]:
+            return connection[0]
+    raise UnconnectedClientException(controller_socket)
+
+
+def get_controller_socket(ev3_socket):
+    """Returns the controller socket currently connected to given EV3 socket."""
+    global connections
+    for connection in connections:
+        if ev3_socket == connection[0]:
+            return connection[1]
+    raise UnconnectedClientException(ev3_socket)
+
+
+async def on_controller_connect(websocket):
+    """Connects a controller to a free EV3 and handles the data transfer."""
+    try:
+        open_controller_connection(websocket)
+        async for message in websocket:
+            controller_socket = get_ev3_socket(websocket)
+            await controller_socket.send(message)
+    finally:
+        on_client_reject(websocket, "No free EV3 available")
+        close_connection(websocket)
+
+
+async def on_ev3_connect(websocket):
+    """Makes EV3 available to controllers and handles the data transfer."""
+    try:
+        open_ev3_connection(websocket)
+        async for message in websocket:
+            controller_socket = get_controller_socket(websocket)
+            await controller_socket.send(message)
+    finally:
+        close_connection(websocket)
+
+
+def open_controller_connection(websocket):
+    global connections
+    for index, connection in enumerate(connections):
+        if connection[1] is None:
+            connections[index] = (connection[0], websocket)
+            return
+    raise NoFreeEV3Exception()
+
+
+def open_ev3_connection(websocket):
+    global connections
+    connections.append((websocket, None))
+
+
+def close_connection(websocket):
+    """Removes the websocket from connections."""
+    global connections
+    for index, connection in enumerate(connections):
+        if websocket == connection[0]:
+            connections[index] = (None, connection[1])
+            return
+        if websocket == connection[1]:
+            connections[index] = (connection[0], None)
+            return
+
+
+async def get_new_client_port(range, client_servers, callback_on_message):
+    """Opens and returns a port in the given port range. Also starts a server on this port."""
     used_ports = get_ports(client_servers)
     free_ports = [port for port in range if port not in used_ports]
     if free_ports == []:
@@ -122,73 +188,43 @@ async def get_client_port(range, client_servers, callback_on_message):
     return client_port
 
 
-async def get_controller_port():
+async def get_new_controller_port():
+    """Opens and returns a port from the Controller port range. Also starts a server on this port."""
     global servers
-    return await get_client_port(
+    return await get_new_client_port(
         range(CONFIG['controller']['port_range']['start'],
               CONFIG['controller']['port_range']['end']),
         servers['controller'],
-        on_controller_message
+        on_controller_connect
     )
 
 
-async def get_ev3_port():
-    global servers
-    return await get_client_port(
+async def get_new_ev3_port():
+    """Opens and returns a port from the EV3 port range. Also starts a server on this port."""
+    global servers    
+    ev3_port = await get_new_client_port(
         range(CONFIG['ev3']['port_range']['start'],
               CONFIG['ev3']['port_range']['end']),
         servers['ev3'],
-        on_ev3_message
+        on_ev3_connect
     )
+    return ev3_port
 
 
-def get_client_socket(opposite_websocket, client_servers):
-    try:
-        connected_port = get_connected_port(get_ws_port(opposite_websocket))
-        for server in client_servers:
-            if get_port(server) == connected_port:
-                return server.websocket
-    except UnconnectedPortException:
-        pass
-    raise UnconnectedClientException(opposite_websocket)
-
-
-def get_ev3_socket(opposite_websocket):
-    global servers
-    return get_client_socket(opposite_websocket, servers['ev3'])
-
-
-def get_controller_socket(opposite_websocket):
-    global servers
-    return get_client_socket(opposite_websocket, servers['controller'])
-
-
-async def on_controller_message(websocket):
-    async for message in websocket:
-        ev3_socket = get_ev3_socket(websocket)
-        await ev3_socket.send(message)
-
-
-async def on_ev3_message(websocket):
-    async for message in websocket:
-        controller_socket = get_controller_socket(websocket)
-        await controller_socket.send(message)
-
-
-async def on_client_entry(websocket, callback_get_port):
-    # TODO: If EV3 connects -> look for unbound controllers to connect to
-    # TODO: If controller connects -> look for unbound EV3 to connect to
+async def on_client_entry(websocket, callback_get_new_port):
+    """Start server for a client on a port retrieved from respective range. \
+        The client can later connect to this server to send and receive messages."""
     # TODO: Password verification
     # initial_data = json.loads(await websocket.recv())
     try:
         # if not initial_data.get('password', None) == os.getenv('CLIENT_PW'):
         #     raise PermissionDeniedException("Entry password incorrect")
-        assigned_port = await callback_get_port()
+        assigned_port = await callback_get_new_port()
         await websocket.send(str(assigned_port))
     except NoPortFreeException:
         await on_client_reject(websocket)
-    except PermissionDeniedException:
-        await on_client_reject(websocket, "Permission denied")
+    # except PermissionDeniedException:
+    #     await on_client_reject(websocket, "Permission denied")
 
 
 async def on_client_reject(websocket, reason="Capacity reached"):
@@ -196,11 +232,13 @@ async def on_client_reject(websocket, reason="Capacity reached"):
 
 
 async def on_controller_entry(websocket):
-    await on_client_entry(websocket, get_controller_port)
+    """Start server on a port in the controller port range which the controller client can connect to later."""
+    await on_client_entry(websocket, get_new_controller_port)
 
 
 async def on_ev3_entry(websocket):
-    await on_client_entry(websocket, get_ev3_port)
+    """Start server on a port in the EV3 port range which the EV3 client can connect to later."""
+    await on_client_entry(websocket, get_new_ev3_port)
 
 
 async def main():
