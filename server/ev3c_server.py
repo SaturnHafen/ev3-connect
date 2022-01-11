@@ -6,10 +6,10 @@ from json.decoder import JSONDecodeError
 
 CONFIG = {
     "ev3": {
-        "port": 8900,
+        "port": 8800,
     },
     "controller": {
-        "port": 8800,
+        "port": 8900,
     },
     "connection_url": "/ev3c",
     "env_path": ".env",
