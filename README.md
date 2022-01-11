@@ -2,7 +2,21 @@
 
 ## Server
 
+### Execution
+
+You can run the server like any other Python module:
+
+```bash
+# start server on localhost with default ports (ev3: 8800, controller: 8900)
+python3 -m server
+```
+
+Note the default URL path `/ev3c`: an EV3 client may connect to `localhost:8800/ev3c` by default.  
+You can change the configured defaults in the `CONFIG` in `ev3_server.py`.
+
 ### Establishing a Connection
+
+This section describes how a client can establish a connection with the server.
 
 #### For EV3 Clients
 
