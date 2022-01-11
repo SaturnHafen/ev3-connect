@@ -11,6 +11,7 @@ pub fn to_hex_string(bytes: &[u8]) -> String {
 
 pub struct EV3 {
     connection: TcpStream,
+    pub name: String,
 }
 
 impl EV3 {
@@ -25,7 +26,9 @@ impl EV3 {
 
         let mut recv_data = &mut buf[..recv_count];
 
-        let re = Regex::new(r"Serial-Number: (\w*)\s\nPort: (\d{4,4})").unwrap();
+        let re =
+            Regex::new(r"Serial-Number: (\w*)\s\nPort: (\d{1,5})\s\nName: (.*)\s\nProtocol: EV3")
+                .unwrap();
 
         let re_match = re
             .captures(from_utf8(&recv_data).expect("Invalid utf-8 sequence"))
@@ -51,6 +54,8 @@ impl EV3 {
             re_match.get(1).unwrap().as_str()
         );
 
+        let name = re_match.get(3).unwrap().as_str().to_string();
+
         stream
             .write(unlock_payload.as_bytes())
             .expect("Couldn't send data to connection");
@@ -68,7 +73,10 @@ impl EV3 {
 
         println!("Brick should be unlocked!");
 
-        EV3 { connection: stream }
+        EV3 {
+            connection: stream,
+            name,
+        }
     }
 
     pub fn send_command(&mut self, payload: &[u8]) -> Vec<u8> {
