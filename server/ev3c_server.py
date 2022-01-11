@@ -246,10 +246,10 @@ async def main():
                                 CONFIG["controller"]["port"]), \
             websockets.serve(on_ev3_connect, "", CONFIG["ev3"]["port"]):
         print("Connection entries on:")
-        print("For EV3: {}:{}".format(CONFIG["connection_url"],
-                                      CONFIG["ev3"]["port"]))
-        print("For Controller: {}:{}".format(CONFIG["connection_url"],
-                                             CONFIG["controller"]["port"]))
+        print("For EV3: {}:{}".format(CONFIG["ev3"]["port"],
+                                      CONFIG["connection_url"]))
+        print("For Controller: {}:{}".format(CONFIG["controller"]["port"],
+                                             CONFIG["connection_url"]))
         await asyncio.Future()  # run forever
 
 
