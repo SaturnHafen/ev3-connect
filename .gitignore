@@ -159,3 +159,5 @@ debug/
 
 # End of https://www.toptal.com/developers/gitignore/api/rust,python
 
+#ignore config files
+*/config.toml
