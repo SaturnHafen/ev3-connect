@@ -24,9 +24,9 @@ pub fn connect() -> TcpStream {
         "Serial-Number: {}\r\nPort: {}\r\nName: {}\r\nProtocol: {}\r\n",
         serial, port, name, protocol
     );
-    println!("------------ Payload ------------");
+    println!("-------------- Payload --------------");
     println!("{}", payload);
-    println!("---------------------------------");
+    println!("-------------------------------------");
     println!("Waiting for Lego LabView to connect...");
 
     let connection = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port)))
