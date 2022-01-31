@@ -238,7 +238,7 @@ async def reject_client(websocket, reason="Capacity reached"):
 
 
 async def update_client(websocket, status, content):
-    await websocket.send("{}: {}".format(status, content))
+    await websocket.send("{{\"{}\": \"{}\"}}".format(status, content))
 
 
 async def main():
