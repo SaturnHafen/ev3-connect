@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{from_str, Value};
 use std::io::prelude::*;
 use std::net::TcpStream;
-use tungstenite::client::connect;
-use tungstenite::protocol::{Message, WebSocket};
-use tungstenite::stream::MaybeTlsStream;
+use websocket::sync::stream::TlsStream;
+use websocket::sync::Client;
+use websocket::{ClientBuilder, Message, OwnedMessage};
 
 mod labview;
 
@@ -36,22 +36,17 @@ fn load_config() -> Config {
     config
 }
 
-fn connect_ws(mut config: Config) -> WebSocket<MaybeTlsStream<TcpStream>> {
+fn connect_ws(mut config: Config) -> Client<TlsStream<TcpStream>> {
     println!(
         "Connecting to {}:{}/{}",
         config.remote, config.port, config.path
     );
-    let (mut connection, _response) = connect(format![
-        "ws://{}:{}/{}",
-        config.remote, config.port, config.path
-    ])
-    .expect(
-        format![
-            "Couldn't connect to remote <{}> on port <{}>",
-            config.remote, config.port
-        ]
-        .as_str(),
-    );
+    let mut client = ClientBuilder::new(
+        format!["wss://{}:{}/{}", config.remote, config.port, config.path].as_str(),
+    )
+    .unwrap()
+    .connect_secure(None)
+    .unwrap();
 
     let message: String;
 
@@ -61,71 +56,75 @@ fn connect_ws(mut config: Config) -> WebSocket<MaybeTlsStream<TcpStream>> {
     }
 
     println!("Sending: {}", message);
-    connection
-        .write_message(Message::Text(message)) // JSON as specifiied in ev3cconnect README
+
+    client
+        .send_message(&Message::text(message)) // JSON as specifiied in ev3cconnect README
         .expect("Couldn't queue init message");
 
-    let response: Message = connection
-        .read_message()
+    let response = client
+        .recv_message()
         .expect("Couldn't read from Websocket...");
 
-    if response.is_text() {
-        println!("Got: {:?}", response.to_text().unwrap());
+    match response {
+        OwnedMessage::Text(payload) => {
+            println!("Got: {:?}", payload);
 
-        let resp: Value = from_str(response.to_text().expect("Couldn't read text..."))
-            .expect("Couldn't parse json...");
+            let resp: Value = from_str(&payload).expect("Couldn't parse json...");
 
-        if resp["Rejected"] != Value::Null {
-            let error = resp["Rejected"].to_string();
+            if resp["Control"] != Value::Null {
+                let ev3 = resp["Control"].to_string();
+                config.ev3 = Some(ev3);
 
-            println!(
-                "Couldn't connect to remote, please inform the server operator. Reason: {}",
-                error
-            );
-            panic!();
-        }
+                store_path(CONFIG_PATH, &config).expect("Couldn't store config...");
+            }
 
-        if resp["Control"] != Value::Null {
-            let ev3 = resp["Control"].to_string();
-            config.ev3 = Some(ev3);
+            if resp["Rejected"] != Value::Null {
+                let error = resp["Rejected"].to_string();
 
-            store_path(CONFIG_PATH, &config).expect("Couldn't store config...");
-        }
-        // store to Config
+                println!(
+                    "Couldn't connect to remote, please inform the server operator. Reason: {}",
+                    error
+                );
+                panic!();
+            }
 
-        if resp["Queue"] != Value::Null {
-            println!(
-                "--------------------------------------------------------------------------------"
-            );
-            println!(
-                "Awaiting control from ev3. Until then, the ev3 will NOT show up in LEGO LabView!"
-            );
-            println!(
-                "--------------------------------------------------------------------------------"
-            );
+            if resp["Queue"] != Value::Null {
+                println!(
+                    "--------------------------------------------------------------------------------"
+                );
+                println!(
+                    "Awaiting control from ev3. Until then, the ev3 will NOT show up in LEGO LabView!"
+                );
+                println!(
+                    "--------------------------------------------------------------------------------"
+                );
 
-            loop {
-                let response: Message = connection
-                    .read_message()
-                    .expect("Couldn't read from Websocket...");
+                loop {
+                    let response = client
+                        .recv_message()
+                        .expect("Couldn't read from Websocket...");
 
-                if response.is_text() {
-                    let resp: Value = from_str(response.to_text().expect("Couldn't read text..."))
-                        .expect("Couldn't parse json...");
+                    match response {
+                        OwnedMessage::Text(payload) => {
+                            let resp: Value = from_str(&payload).expect("Couldn't parse json...");
 
-                    if resp["Control"] != Value::Null {
-                        let ev3 = resp["Control"].to_string();
-                        config.ev3 = Some(ev3);
+                            if resp["Control"] != Value::Null {
+                                let ev3 = resp["Control"].to_string();
+                                config.ev3 = Some(ev3);
 
-                        store_path(CONFIG_PATH, &config).expect("Couldn't store config...");
-                        break;
+                                store_path(CONFIG_PATH, &config).expect("Couldn't store config...");
+                                break;
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
         }
+        _ => (),
     }
 
-    connection
+    client
 }
 
 fn main() {
@@ -134,64 +133,53 @@ fn main() {
     let mut labview_connection = labview::connect();
 
     let mut buf = [0; 65555]; // 65536 is max value of u16, just use a few more for good measure more for length
-    let mut length;
     let mut response;
 
     loop {
-        let result = labview_connection.read(&mut buf);
-
-        match result {
-            Ok(x) => length = x,
-            Err(x) => {
-                println!(
-                    "Connection to LabView was closed, attempting to reconnect... (Error: {:?})",
-                    x
-                );
-                labview_connection = labview::connect();
-                continue;
-            }
-        }
+        let len = labview_connection
+            .read(&mut buf)
+            .expect("Couldn't read from LabView connection");
 
         websocket
-            .write_message(Message::Binary((&buf[..length]).to_vec()))
+            .send_message(&Message::binary(&buf[..len]))
             .expect("Couldn't write to WebSocket connection...");
 
         if buf[4].eq(&0x00) || buf[4].eq(&0x01) {
             // DIRECT_COMMAND_REPLY || SYSTEM_COMMAND_REPLY
             loop {
                 response = websocket
-                    .read_message()
+                    .recv_message()
                     .expect("Couldn't read from websocket connection...");
 
-                if response.is_binary() {
-                    break;
-                } else if response.is_ping() {
-                    websocket
-                        .write_message(Message::Pong(response.into_data()))
-                        .expect("Couldn't send pong reply");
-                } else {
-                    println!("No binary frame, got: {}", response);
+                match response {
+                    OwnedMessage::Ping(payload) => {
+                        websocket
+                            .send_message(&Message::pong(payload))
+                            .expect("Couldn't send pong reply");
+                    }
+
+                    OwnedMessage::Binary(payload) => {
+                        if (payload.len() - 2) as u16
+                            != (((payload[1] as u16) << 8) | payload[0] as u16)
+                        {
+                            panic!(
+                                "Expected size does not match received size! (Expected: {}, Received: {})",
+                                (((payload[0] as u16) << 8) | payload[1] as u16),
+                                payload.len() - 2
+                            );
+                        }
+
+                        labview_connection
+                            .write(&payload)
+                            .expect("Couldn't write to LabView connection...");
+
+                        break;
+                    }
+                    _ => {}
                 }
             }
-            let data = response.into_data();
-
-            //println!("        | len | cnt |rs| pl ");
-            //println!("Recv: 0x|{}|", to_hex_string(&data));
-
-            if (data.len() - 2) as u16 != (((data[1] as u16) << 8) | data[0] as u16) {
-                panic!(
-                    "Expected size does not match received size! (Expected: {}, Received: {})",
-                    (((data[0] as u16) << 8) | data[1] as u16),
-                    data.len() - 2
-                );
-            }
-
-            labview_connection
-                .write(&data)
-                .expect("Couldn't write to LabView connection...");
         } else if buf[4].eq(&0x80) || buf[4].eq(&0x81) {
             // DIRECT_COMMAND_NO_REPLY || SYSTEM_COMMAND_NO_REPLY
-
             continue;
         } else {
             debug_assert!(false, "Got a strange message type!");
