@@ -3,17 +3,23 @@ use ev3::EV3;
 use io_bluetooth::bt::BtAddr;
 use serde::{Deserialize, Serialize};
 use std::net::TcpStream;
+use std::thread;
 use websocket::sync::stream::TlsStream;
 use websocket::sync::Client;
 use websocket::{ClientBuilder, Message, OwnedMessage};
 
 mod ev3;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct Config {
     remote: String,
     port: u16,
     path: String,
+    ev3s: Vec<EV3Connection>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct EV3Connection {
     nap: u16,
     sap: u32,
     name: String,
@@ -25,8 +31,16 @@ impl ::std::default::Default for Config {
             remote: "localhost".to_string(),
             port: 8800,
             path: "ev3c".to_string(),
-            nap: 0x0,
-            sap: 0x0,
+            ev3s: vec![EV3Connection::default()],
+        }
+    }
+}
+
+impl ::std::default::Default for EV3Connection {
+    fn default() -> Self {
+        Self {
+            nap: 22,
+            sap: 1234567890,
             name: "EV3".to_string(),
         }
     }
@@ -70,30 +84,46 @@ fn connect_ws(config: Config, ev3_name: &String) -> Client<TlsStream<TcpStream>>
 
 fn main() {
     let config = load_config();
-    let mut ev3 = connect_ev3(BtAddr::nap_sap(config.nap, config.sap), &config.name);
-    let mut websocket = connect_ws(config, &ev3.name);
 
-    loop {
-        let msg = websocket.recv_message().unwrap();
+    let ev3_configs = config.ev3s.clone();
 
-        match msg {
-            OwnedMessage::Binary(payload) => {
-                let response = ev3.send_command(&payload);
-                if payload[4].eq(&0x80) || payload[4].eq(&0x81) {
-                    // DIRECT_COMMAND_NO_REPLY || SYSTEM_COMMAND_NO_REPLY -> No need to read data from ev3 connection
-                    continue;
+    for ev3config in ev3_configs.into_iter() {
+        let thread_config = config.clone();
+
+        // start thread for every EV3 in config
+        thread::spawn(move || {
+            let mut ev3 = connect_ev3(
+                BtAddr::nap_sap(ev3config.nap, ev3config.sap),
+                &ev3config.name,
+            );
+            let mut websocket = connect_ws(thread_config, &ev3config.name);
+
+            loop {
+                let msg = websocket.recv_message().unwrap();
+
+                match msg {
+                    OwnedMessage::Binary(payload) => {
+                        if payload.len() == 0 {
+                            continue;
+                        }
+                        let response = ev3.send_command(&payload);
+                        if payload[4].eq(&0x80) || payload[4].eq(&0x81) {
+                            // DIRECT_COMMAND_NO_REPLY || SYSTEM_COMMAND_NO_REPLY -> No need to read data from ev3 connection
+                            continue;
+                        }
+
+                        websocket
+                            .send_message(&Message::binary(response))
+                            .expect("Couldn't write response!");
+                    }
+
+                    OwnedMessage::Ping(payload) => {
+                        websocket.send_message(&Message::pong(payload)).unwrap();
+                    }
+
+                    _ => {}
                 }
-
-                websocket
-                    .send_message(&Message::binary(response))
-                    .expect("Couldn't write response!");
             }
-
-            OwnedMessage::Ping(payload) => {
-                websocket.send_message(&Message::pong(payload)).unwrap();
-            }
-
-            _ => {}
-        }
+        });
     }
 }
