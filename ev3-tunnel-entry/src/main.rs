@@ -51,7 +51,7 @@ fn connect_ws(mut config: Config) -> Client<TlsStream<TcpStream>> {
     let message: String;
 
     match config.ev3 {
-        Some(ev3) => message = format!["{{\"preferred_ev3\": {}}}", ev3.as_str()],
+        Some(ev3) => message = format!["{{\"preferred_ev3\": \"{}\"}}", ev3.as_str()],
         None => message = "{}".to_string(),
     }
 
