@@ -66,6 +66,7 @@ def get_controlling_websocket(ev3_websocket):
         if connection['websocket'] == ev3_websocket:
             return connection['control']
 
+
 def get_connected_websockets(ev3_id):
     """Returns websockets of controlling and queued controller clients."""
     global connections
@@ -75,6 +76,7 @@ def get_connected_websockets(ev3_id):
         controllers.append(connection['control'])
     controllers += connection['queue']
     return controllers
+
 
 async def on_controller_connect(websocket):
     """Connects a controller to an EV3 and handles the data transfer."""
@@ -98,7 +100,7 @@ async def on_controller_connect(websocket):
 
 async def establish_controller_connection(websocket):
     """Performs controller connection protocol. Blocks until connection is established.
-    
+
     Raises
     ------
     NoEV3AvailableError:
@@ -115,7 +117,7 @@ async def establish_controller_connection(websocket):
     if len(connections.keys()) == 0:
         raise NoEV3AvailableError()
     preferred_ev3 = initial_data.get("preferred_ev3", None)
-    if preferred_ev3 is None:
+    if not is_connected(preferred_ev3):
         preferred_ev3 = get_available_ev3()
     await control(preferred_ev3, websocket)
 
@@ -162,6 +164,12 @@ def get_available_ev3():
     return shortest_queue[0]
 
 
+def is_connected(ev3_id):
+    """Returns whether there is an EV3 with given ev3_id connected."""
+    global connections
+    return ev3_id is not None and ev3_id in connections
+
+
 async def on_ev3_connect(websocket):
     """Makes EV3 available to controllers and handles the data transfer."""
     try:
@@ -184,7 +192,7 @@ async def on_ev3_connect(websocket):
 
 async def establish_ev3_connection(websocket):
     """Performs EV3 connection protocol. Blocks until connection is established.
-    
+
     Raises
     ------
     JSONDecoderError:
@@ -192,7 +200,7 @@ async def establish_ev3_connection(websocket):
 
     InitialDataError:
         If ID is missing in initial data sent by the EV3.
-    
+
     PermissionDeniedError:
         If the password is either not given or wrong.
     """
