@@ -1,0 +1,13 @@
+remote = 'YOUR.DOMAIN.EXAMPLE.COM'
+port = 443
+path = 'YOUR/PATH'
+
+[[ev3s]]
+nap = 22
+sap = 1397490210
+name = "EV3"
+
+[[ev3s]]
+nap = 22
+sap = 1397490211
+name = "EV4"
