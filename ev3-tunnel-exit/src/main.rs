@@ -3,7 +3,7 @@ use ev3::EV3;
 use io_bluetooth::bt::BtAddr;
 use serde::{Deserialize, Serialize};
 use std::net::TcpStream;
-use std::thread;
+use std::thread::{self, JoinHandle};
 use websocket::sync::stream::TlsStream;
 use websocket::sync::Client;
 use websocket::{ClientBuilder, Message, OwnedMessage};
@@ -87,11 +87,13 @@ fn main() {
 
     let ev3_configs = config.ev3s.clone();
 
+    let mut handles: Vec<JoinHandle<()>> = Vec::new();
+
     for ev3config in ev3_configs.into_iter() {
         let thread_config = config.clone();
 
         // start thread for every EV3 in config
-        thread::spawn(move || {
+        let join_handle: JoinHandle<_> = thread::spawn(move || {
             let mut ev3 = connect_ev3(
                 BtAddr::nap_sap(ev3config.nap, ev3config.sap),
                 &ev3config.name,
@@ -125,5 +127,11 @@ fn main() {
                 }
             }
         });
+        handles.push(join_handle);
+    }
+
+    // Join every ev3-controlling-thread to keep the main-thread alive
+    for handle in handles.into_iter() {
+        handle.join().expect("The thread we joined panicked!");
     }
 }
