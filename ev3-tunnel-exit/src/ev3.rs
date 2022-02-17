@@ -1,6 +1,9 @@
 use io_bluetooth::bt::{self, BtAddr, BtStream};
 use std::iter;
 
+pub const DIRECT_COMMAND_NO_REPLY: u8 = 0x80;
+pub const SYSTEM_COMMAND_NO_REPLY: u8 = 0x00;
+
 pub fn to_hex_string(bytes: &[u8]) -> String {
     let strs: Vec<String> = bytes.iter().map(|b| format!("{:02X}", b)).collect();
 
@@ -35,13 +38,13 @@ impl EV3 {
             .send(&payload)
             .expect("Couldn't write to EV3 connection...");
 
-        println!("Send to EV3:");
-        println!("        | len | cnt |ty| hd  |op");
-        println!("Send: 0x|{}|", to_hex_string(&payload));
+        dbg!("Send to EV3:");
+        dbg!("        | len | cnt |ty| hd  |op");
+        dbg!("Send: 0x|{}|", to_hex_string(&payload));
 
         let mut recv_buf = [0; 65555];
 
-        if payload[4].eq(&0x80) || payload[4].eq(&0x81) {
+        if payload[4].eq(&DIRECT_COMMAND_NO_REPLY) || payload[4].eq(&SYSTEM_COMMAND_NO_REPLY) {
             let result: Vec<u8> = Vec::new();
             result
         } else {
@@ -52,8 +55,8 @@ impl EV3 {
 
             let recv_data = &recv_buf[..recv_count];
 
-            println!("        | len | cnt |rs| pl ");
-            println!("Recv: 0x|{}|", to_hex_string(&recv_data));
+            dbg!("        | len | cnt |rs| pl ");
+            dbg!("Recv: 0x|{}|", to_hex_string(&recv_data));
 
             Vec::from(recv_data)
         }

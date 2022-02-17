@@ -106,11 +106,14 @@ fn main() {
                 match msg {
                     OwnedMessage::Binary(payload) => {
                         if payload.len() == 0 {
+                            // controlling student disconnected
                             continue;
                         }
                         let response = ev3.send_command(&payload);
-                        if payload[4].eq(&0x80) || payload[4].eq(&0x81) {
-                            // DIRECT_COMMAND_NO_REPLY || SYSTEM_COMMAND_NO_REPLY -> No need to read data from ev3 connection
+                        if payload[4].eq(&ev3::DIRECT_COMMAND_NO_REPLY)
+                            || payload[4].eq(&ev3::SYSTEM_COMMAND_NO_REPLY)
+                        {
+                            // no need to read data from ev3 connection
                             continue;
                         }
 
@@ -123,7 +126,9 @@ fn main() {
                         websocket.send_message(&Message::pong(payload)).unwrap();
                     }
 
-                    _ => {}
+                    _ => {
+                        // discard all other messages
+                    }
                 }
             }
         });

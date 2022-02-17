@@ -4,82 +4,104 @@ use std::str::from_utf8;
 use std::thread::{sleep, spawn};
 use std::time::Duration;
 
-const SERIAL: &str = "0016534c0221";
-const PORT: u16 = 5555;
-const NAME: &str = "SKLG-01";
-const PROTOCOL: &str = "EV3";
+pub const DIRECT_COMMAND_NO_REPLY: u8 = 0x80;
+pub const SYSTEM_COMMAND_NO_REPLY: u8 = 0x00;
 
-pub fn spawn_connect_thread() {
-    let socket = UdpSocket::bind("0.0.0.0:0").expect("[ERROR] Couldn't bind to adress...");
-
-    socket
-        .set_read_timeout(Some(Duration::new(10, 0)))
-        .expect("[ERROR] Couldn't set read timeout...");
-
-    socket
-        .set_broadcast(true)
-        .expect("[ERROR] Couldn't set broadcast flag...");
-
-    let payload = format!(
-        "Serial-Number: {}\r\nPort: {}\r\nName: {}\r\nProtocol: {}\r\n",
-        SERIAL, PORT, NAME, PROTOCOL
-    );
-    println!("-------------- Payload --------------");
-    println!("{}", payload);
-    println!("-------------------------------------");
-    println!("Waiting for Lego LabView to connect...");
-
-    spawn(move || {
-        loop {
-            let send_buf = payload.as_bytes();
-            let status = socket.send_to(send_buf, "127.255.255.255:3015"); // broadcast to loopback
-
-            if status.is_ok() {
-                let mut recv_buf = [0; 64];
-
-                let result = socket.recv(&mut recv_buf);
-
-                if result.is_err() {
-                    // println!("{:?}", result.err());
-                    continue;
-                }
-
-                let answer_length = result.unwrap();
-
-                let answer = &mut recv_buf[..answer_length];
-
-                println!(
-                        "Connection established! (Lego LabView responded with: {}). Finish connecting by clicking on {} in the bottom-right connection panel in Lego LabView!",
-                        from_utf8(answer).unwrap(), NAME
-                    );
-            }
-            sleep(Duration::from_secs(5));
-        }
-    });
+pub struct Labview {
+    serial: String,
+    port: u16,
+    pub name: String,
+    protocol: String,
 }
 
-pub fn connect() -> TcpStream {
-    let connection = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], PORT)))
-        .expect("[ERROR] Couldn't bind TCP-Listener...");
+impl ::std::default::Default for Labview {
+    fn default() -> Self {
+        Self {
+            serial: "001612345678".to_string(),
+            port: 5555,
+            name: "EV3".to_string(),
+            protocol: "EV3".to_string(),
+        }
+    }
+}
 
-    let (mut stream, remote) = connection
-        .accept()
-        .expect("[Error] Couldn't accept TCP-Connection...");
+impl Labview {
+    pub fn spawn_connect_thread(&mut self) {
+        let socket = UdpSocket::bind("0.0.0.0:0").expect("[ERROR] Couldn't bind to adress...");
 
-    println!("Connection accepted from {}", remote);
+        socket
+            .set_read_timeout(Some(Duration::new(10, 0)))
+            .expect("[ERROR] Couldn't set read timeout...");
 
-    let mut recv_buf = [0; 64];
+        socket
+            .set_broadcast(true)
+            .expect("[ERROR] Couldn't set broadcast flag...");
 
-    let response = stream
-        .read(&mut recv_buf)
-        .expect("[Error] Couldn't read from stream...");
+        let payload = format!(
+            "Serial-Number: {}\r\nPort: {}\r\nName: {}\r\nProtocol: {}\r\n",
+            self.serial, self.port, self.name, self.protocol
+        );
+        dbg!("-------------- Payload --------------");
+        dbg!("{}", &payload);
+        dbg!("-------------------------------------");
+        println!("Waiting for Lego LabView to connect...");
 
-    println!("{}", from_utf8(&recv_buf[..response]).unwrap());
+        let name = self.name.clone();
+        let pl = payload.clone();
 
-    stream
-        .write("Accept:EV340\r\n\r\n".as_bytes())
-        .expect("[Error] Couldn't write to TCP-Stream...");
+        spawn(move || {
+            loop {
+                let send_buf = pl.as_bytes();
+                let status = socket.send_to(send_buf, "127.255.255.255:3015"); // broadcast to loopback
 
-    println!("Connection with Lego LabView established!");
-    stream
+                if status.is_ok() {
+                    let mut recv_buf = [0; 64];
+
+                    let result = socket.recv(&mut recv_buf);
+
+                    if result.is_err() {
+                        // Probably timeout (no response)
+                        // dbg!("{:?}", result.err());
+                        continue;
+                    }
+
+                    let answer_length = result.unwrap();
+
+                    let answer = &mut recv_buf[..answer_length];
+
+                    println!(
+                            "Connection established! (Lego LabView responded with: {}). Finish connecting by clicking on {} in the bottom-right connection panel in Lego LabView!",
+                            from_utf8(answer).unwrap(), name
+                        );
+                }
+                sleep(Duration::from_secs(5));
+            }
+        });
+    }
+
+    pub fn connect(self) -> TcpStream {
+        let connection = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], self.port)))
+            .expect("[Error] Couldn't bind TCP-Listener...");
+
+        let (mut stream, remote) = connection
+            .accept()
+            .expect("[Error] Couldn't accept TCP-Connection...");
+
+        dbg!("Connection accepted from {}", remote);
+
+        let mut recv_buf = [0; 64];
+
+        let response = stream
+            .read(&mut recv_buf)
+            .expect("[Error] Couldn't read from stream...");
+
+        dbg!("{}", from_utf8(&recv_buf[..response]).unwrap());
+
+        stream
+            .write("Accept:EV340\r\n\r\n".as_bytes())
+            .expect("[Error] Couldn't write to TCP-Stream...");
+
+        println!("Connection with Lego LabView established! You are now ready to go!");
+        stream
+    }
 }
