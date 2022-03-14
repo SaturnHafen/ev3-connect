@@ -1,7 +1,7 @@
 [package]
 name = "ev3-tunnel-entry"
-version = "0.3.0"
-edition = "2021"
+version = "0.3.1"
+edition = "2022"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
