@@ -1,6 +1,6 @@
 [package]
 name = "ev3-tunnel-entry"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -10,3 +10,7 @@ websocket = "0.26.2"
 serde_json = "1"
 confy = "0.4.0"
 serde = { version = "1.0", features = ["derive"] }
+
+[features]
+default = []
+rotate-students = [] # feature is currently not supported
