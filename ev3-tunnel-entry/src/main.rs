@@ -170,8 +170,7 @@ fn main() {
                     break;
                 }
                 _ => {
-                    // Unexpected message type
-                    unreachable!("[!] Message type not expected!");
+                    // Unexpected message type - just ignore it :)
                 }
             }
         }
