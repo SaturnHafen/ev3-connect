@@ -4,6 +4,8 @@ use std::iter;
 pub const DIRECT_COMMAND_NO_REPLY: u8 = 0x80;
 pub const SYSTEM_COMMAND_NO_REPLY: u8 = 0x81;
 
+const RETRY_COUNT: u8 = 10;
+
 pub struct EV3 {
     connection: BtStream,
     pub name: String,
@@ -13,7 +15,33 @@ impl EV3 {
     pub fn connect(ev3: &BtAddr, name: &str) -> EV3 {
         println!("[*] Connecting to {}", ev3);
 
-        let socket = BtStream::connect(iter::once(ev3), bt::BtProtocol::RFCOMM).unwrap();
+        let socket;
+
+        let mut retry_count = 0;
+
+        loop {
+            let connection = BtStream::connect(iter::once(ev3), bt::BtProtocol::RFCOMM);
+
+            match connection {
+                Ok(sock) => {
+                    socket = sock;
+                    break;
+                }
+                Err(err) => {
+                    println!(
+                        "[!] Could not connect, retrying ({}/{})... {}",
+                        retry_count + 1,
+                        RETRY_COUNT,
+                        err
+                    )
+                }
+            }
+            retry_count += 1;
+
+            if retry_count >= RETRY_COUNT {
+                panic!("[!] The brick is unreachable!")
+            }
+        }
 
         match socket.peer_addr() {
             Ok(addr) => println!("[*] Successfully connected to {}.", addr),
