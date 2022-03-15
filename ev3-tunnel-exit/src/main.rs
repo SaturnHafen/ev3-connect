@@ -122,6 +122,6 @@ fn main() {
 
     // Join every ev3-controlling-thread to keep the main-thread alive
     for handle in handles {
-        handle.join().expect("[!] The thread we joined panicked!");
+        let _ = handle.join();
     }
 }
