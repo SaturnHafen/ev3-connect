@@ -2,8 +2,7 @@ use confy::load_path;
 use serde::{Deserialize, Serialize};
 use serde_json::from_str;
 use std::io::prelude::*;
-use std::net::TcpStream;
-use websocket::sync::stream::TlsStream;
+use websocket::stream::sync::NetworkStream;
 use websocket::sync::Client;
 use websocket::{ClientBuilder, Message, OwnedMessage};
 
@@ -30,10 +29,10 @@ fn load_config() -> Config {
     load_path(CONFIG_PATH).expect("[!] Couldn't read config file")
 }
 
-fn connect_ws(config: &mut Config) -> Client<TlsStream<TcpStream>> {
-    let mut client = ClientBuilder::new(format!["wss://{}", config.url].as_str())
+fn connect_ws(config: &mut Config) -> Client<Box<dyn NetworkStream + Send>> {
+    let mut client = ClientBuilder::new(&config.url)
         .unwrap()
-        .connect_secure(None)
+        .connect(None)
         .unwrap();
 
     let message: String = match &config.ev3 {
