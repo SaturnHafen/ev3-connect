@@ -2,9 +2,8 @@ use confy::load_path;
 use ev3::EV3;
 use io_bluetooth::bt::BtAddr;
 use serde::{Deserialize, Serialize};
-use std::net::TcpStream;
 use std::thread::{self, JoinHandle};
-use websocket::sync::stream::TlsStream;
+use websocket::stream::sync::NetworkStream;
 use websocket::sync::Client;
 use websocket::{ClientBuilder, Message, OwnedMessage};
 
@@ -55,11 +54,12 @@ fn connect_ev3(ev3: &BtAddr, name: &str) -> EV3 {
     ev3
 }
 
-fn connect_ws(config: &Config, ev3_name: &str) -> Client<TlsStream<TcpStream>> {
-    let mut client = ClientBuilder::new(format!["wss://{}", config.url].as_str())
+fn connect_ws(config: &Config, ev3_name: &str) -> Client<Box<dyn NetworkStream + Send>> {
+    let mut client = ClientBuilder::new(&config.url)
         .unwrap()
-        .connect_secure(None)
+        .connect(None)
         .unwrap();
+
     client
         .send_message(&Message::text(format!["{{\"id\": \"{}\"}}", ev3_name])) // JSON as specified in ev3c-connect README
         .expect("[!] Couldn't queue init message");

@@ -1,4 +1,4 @@
-url = 'YOUR.DOMAIN.EXAMPLE.COM:443/YOUR/PATH'
+url = 'wss://YOUR.DOMAIN.EXAMPLE.COM:443/YOUR/PATH'
 
 [[ev3s]]
 nap = 22
